@@ -2,61 +2,100 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
+	"os"
+	"time"
+
+	"github.com/FaheemAhmed5525/GithubProfileFetcher/internal/api"
+	"github.com/FaheemAhmed5525/GithubProfileFetcher/internal/formatter"
+	"github.com/FaheemAhmed5525/GithubProfileFetcher/internal/models"
 )
 
 func main() {
-	userName := flag.String("user", "", "Github username (required)")
-	outputFormat := flag.String("format", "text", "output format: text, json, csv")
-	includeRepos := flag.String("repos", false, "Include repositries details")
-	token := flag.String("token", "", "Github token for higher rate limits")
+	// CLI Flags
+	username := flag.String("user", "", "GitHub username (required)")
+	outputFormat := flag.String("format", "text", "Output format: text, json, csv")
+	includeRepos := flag.Bool("repos", false, "Include repository details")
+	limitRepos := flag.Int("limit", 10, "Limit number of repositories to fetch")
+	token := flag.String("token", os.Getenv("GITHUB_TOKEN"), "GitHub token (or set GITHUB_TOKEN env)")
+	showRateLimit := flag.Bool("rate-limit", false, "Show GitHub API rate limit info")
 
 	flag.Parse()
 
-	//validations
-	if *userNmae == "" {
-		log.Fatal("Error: -- user flag is required")
+	// Validation
+	if *username == "" && !*showRateLimit {
+		flag.Usage()
+		log.Fatal("Error: --user flag is required (or use --rate-limit)")
 	}
 
-	cfg := *config.Config {
-		GithubToken: *token,
-		OutputFormat: outputFormat,
-		IncludeRepos: includeRepos
+	// Initialize client
+	client := api.NewGitHubClient(*token)
+
+	// Show rate limit if requested
+	if *showRateLimit {
+		rateLimit, err := client.RateLimit()
+		if err != nil {
+			log.Fatalf("Error fetching rate limit: %v", err)
+		}
+
+		resetTime := time.Unix(rateLimit.Reset, 0)
+		fmt.Printf("GitHub API Rate Limits:\n")
+		fmt.Printf("  Limit:     %d requests/hour\n", rateLimit.Limit)
+		fmt.Printf("  Remaining: %d requests\n", rateLimit.Remaining)
+		fmt.Printf("  Resets at: %s\n", resetTime.Format("2006-01-02 15:04:05 MST"))
+		fmt.Printf("  Reset in:  %v\n", time.Until(resetTime).Round(time.Minute))
+		return
 	}
 
-
-	// new client api
-	client := api.NewGitHubClient(cfg.GithubToken)
-
-	// data fetch
-	user, err = client.GetUser(*userName)
+	// Fetch user data
+	fmt.Printf("Fetching profile for %s...\n", *username)
+	user, err := client.GetUser(*username)
 	if err != nil {
-		log.FatalF("Error fetching user: %w", err)
+		log.Fatalf("Error fetching user: %v", err)
 	}
 
-	// repo check and feth
+	// Fetch repositories if requested
 	var repos []models.Repository
 	if *includeRepos {
-		repos, err = client.GetUserRepos(*userName)
+		fmt.Printf("Fetching repositories...\n")
+		allRepos, err := client.GetUserRepos(*username)
 		if err != nil {
-			log.PrintF("Warning couldn't fetch the repositories, %v", err)
+			log.Printf("Warning: Could not fetch repositories: %v", err)
+		} else {
+			// Limit repos if specified
+			if *limitRepos > 0 && *limitRepos < len(allRepos) {
+				repos = allRepos[:*limitRepos]
+			} else {
+				repos = allRepos
+			}
 		}
 	}
 
-	var formatter formatter.Formatter
+	// Create formatter based on output format
+	var formatterInstance formatter.Formatter
 	switch *outputFormat {
 	case "json":
-		formatter = formatter.JSONFormatter{}
+		formatterInstance = formatter.JSONFormatter{}
 	case "csv":
-		formatter = formatter.CSVFormatter{}
+		formatterInstance = formatter.CSVFormatter{}
 	default:
-		formatter = formatter.TextFormatter{}
+		formatterInstance = formatter.TextFormatter{}
 	}
 
-	report, err := formatter.Format(user, repos)
+	// Generate and output report
+	report, err := formatterInstance.Format(user, repos)
 	if err != nil {
-		log.FatalF("Error formatting output: %v", err)
+		log.Fatalf("Error formatting output: %v", err)
 	}
 
 	fmt.Println(report)
+
+	// Show stats if we have repos
+	if len(repos) > 0 {
+		stats := models.CalculateStats(user, repos)
+		if statsOutput, err := formatterInstance.FormatStats(stats); err == nil {
+			fmt.Println("\n" + statsOutput)
+		}
+	}
 }

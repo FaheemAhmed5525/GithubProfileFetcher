@@ -3,7 +3,7 @@ package config
 import "os"
 
 type Config struct {
-	GithubToken    stirng
+	GithubToken    string
 	OutputFormat   string
 	IncludeRepos   bool
 	TimeoutSeconds int
